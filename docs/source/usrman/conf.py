@@ -66,9 +66,26 @@ exclude_patterns = ['_build', 'Thumbs.db', '.DS_Store']
 
 default_role = 'any'
 
+nitpick = False
+nitpick_ignore = [
+    ('c:func', r'atexit'),
+    ('py:mod', r'__worker__'),
+    ('py:mod', r'pickle5'),
+    ('envvar', r'MPICC'),
+]
+nitpick_ignore_regex = [
+    (r'envvar', r'(LD_LIBRARY_)?PATH'),
+    (r'envvar', r'(MPICH|OMPI|MPIEXEC)_.*'),
+    (r'c:.*', r'MPI_.*'),
+]
+# python_use_unqualified_type_names = True
+
 autodoc_typehints = 'description'
-autodoc_type_aliases = {}
 autodoc_mock_imports = []
+autodoc_type_aliases = {
+    'dtype': 'numpy.dtype',
+    'DTypeLike': 'numpy.typing.DTypeLike',
+}
 
 autosummary_context = {
     'synopsis': {},
@@ -88,6 +105,29 @@ try:
         extensions.append('sphinx_rtd_theme')
 except ImportError:
     sphinx_rtd_theme = None
+
+
+def _patch_domain_py():
+    from sphinx.domains import python
+    numpy_types = ['numpy.typing.DTypeLike']
+    try:
+        from mpi4py.typing import __all__ as mpi4py_types
+    except ImportError:
+        mpi4py_types = []
+
+    def make_xref(self, rolename, domain, target, *args, **kwargs):
+        if target in ('True', 'False'):
+            rolename = 'obj'
+        elif target in numpy_types:
+            rolename = 'data'
+        elif target in mpi4py_types:
+            rolename = 'data'
+        return make_xref_orig(self, rolename, domain, target, *args, *kwargs)
+
+    numpy_types = set(numpy_types)
+    mpi4py_types = set(mpi4py_types)
+    make_xref_orig = python.PyXrefMixin.make_xref
+    python.PyXrefMixin.make_xref = make_xref
 
 
 def _patch_autosummary():
@@ -145,6 +185,7 @@ def _type_documenter():
 
 
 def setup(app):
+    _patch_domain_py()
     _patch_autosummary()
     app.add_autodocumenter(_type_documenter())
     try:
@@ -188,6 +229,19 @@ def setup(app):
         if isinstance(attr, type):
             if attr.__module__ == mod.__name__:
                 autodoc_type_aliases[name] = f"{name}"
+
+    modules = [
+        'mpi4py.util.dtlib',
+        'mpi4py.util.pkl5',
+    ]
+    typing_overload = typing.overload
+    typing.overload = lambda arg: arg
+    for name in modules:
+        mod = importlib.import_module(name)
+        ann = apidoc.load_module(f'{mod.__file__}i', name)
+        apidoc.annotate(mod, ann)
+    typing.overload = typing_overload
+
 
 # -- Options for HTML output -------------------------------------------------
 
